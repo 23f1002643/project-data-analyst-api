@@ -39,108 +39,108 @@ async def analyze(request: Request):
             file_path = os.path.join(request_folder, value.filename)
             async with aiofiles.open(file_path, "wb") as f:
                 await f.write(await value.read())
-            saved_files[field_name] = file_path
+            saved_files[value.filename] = file_path  # Use filename as key, not field_name
 
             # If it's questions.txt, read its content
             if value.filename.lower() == "questions.txt":
-                contents = await value.read()
-                question_text = contents.decode("utf-8")
+                # Re-open the saved file to read content (since value.read() already consumed)
+                async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                    question_text = await f.read()
         else:
             saved_files[field_name] = value
 
-    # Fallback: If no questions.txt, use the first file as question
+    # Fallback: If no questions.txt, use the first uploaded file content as question_text
     if question_text is None and saved_files:
+        # Find the first uploaded file path
         first_file_path = next(iter(saved_files.values()))
-        async with aiofiles.open(first_file_path, "r") as f:
+        # Read content of that file
+        async with aiofiles.open(first_file_path, "r", encoding="utf-8") as f:
             question_text = await f.read()
 
-    # ✅ 4. Get code steps from LLM
+    if question_text is None:
+        return JSONResponse({"error": "No questions.txt file found and no fallback file available."}, status_code=400)
+
+    # 4. Get code steps from LLM
     response = await parse_question_with_llm(
         question_text=question_text,
         uploaded_files=saved_files,
         folder=request_folder
     )
 
-    print(response)
+    print("LLM parse_question_with_llm response:", response)
 
-    # ✅ 5. Execute generated code safely
+    # 5. Execute generated code safely
     execution_result = await run_python_code(response["code"], response["libraries"], folder=request_folder)
 
-    print(execution_result)
+    print("run_python_code execution_result:", execution_result)
 
     count = 0
     while execution_result["code"] == 0 and count < 3:
-        print(f"Error occured while scrapping x{count}")
-        new_question_text = str(question_text) + "previous time this error occured" + str(execution_result["output"])
+        print(f"Error occurred while scraping, retry x{count}")
+        new_question_text = f"{question_text}\nPrevious error: {execution_result['output']}"
         response = await parse_question_with_llm(
             question_text=new_question_text,
             uploaded_files=saved_files,
             folder=request_folder
         )
-
-        print(response)
-
+        print("Retry LLM response:", response)
         execution_result = await run_python_code(response["code"], response["libraries"], folder=request_folder)
-
-        print(execution_result)
-
+        print("Retry execution_result:", execution_result)
         count += 1
 
-    if execution_result["code"] == 1:
-        execution_result = execution_result["output"]
-    else:
-        return JSONResponse({"message": "error occured while scrapping."})
+    if execution_result["code"] != 1:
+        return JSONResponse({"message": "Error occurred while scraping after retries."})
 
-    # 6. get answers from llm
+    # 6. Get answers from LLM
     gpt_ans = await answer_with_data(response["questions"], folder=request_folder)
 
-    print(gpt_ans)
+    print("answer_with_data response:", gpt_ans)
 
-    # 7. Executing code
+    # 7. Execute answer code
     try:
         final_result = await run_python_code(gpt_ans["code"], gpt_ans["libraries"], folder=request_folder)
     except Exception as e:
-        gpt_ans = await answer_with_data(response["questions"] + str("Please follow the json structure"), folder=request_folder)
-
-        print("Trying after it caught under except block-wrong json format", gpt_ans)
+        print("Exception caught while executing answer code:", e)
+        gpt_ans = await answer_with_data(response["questions"] + " Please follow the JSON structure.", folder=request_folder)
         final_result = await run_python_code(gpt_ans["code"], gpt_ans["libraries"], folder=request_folder)
 
     count = 0
-    json_str = 1
+    json_str_flag = True
     while final_result["code"] == 0 and count < 3:
-        print(f"Error occured while executing code x{count}")
-        new_question_text = str(response["questions"]) + "previous time this error occured" + str(final_result["output"])
-        if json_str == 0:
-            new_question_text += "follow the structure {'code': '', 'libraries': ''}"
+        print(f"Error occurred while executing final code, retry x{count}")
+        new_question_text = f"{response['questions']}\nPrevious error: {final_result['output']}"
+        if not json_str_flag:
+            new_question_text += " Follow the structure {'code': '', 'libraries': ''}"
 
         gpt_ans = await answer_with_data(new_question_text, folder=request_folder)
-
-        print(gpt_ans)
+        print("Retry answer_with_data response:", gpt_ans)
 
         try:
-            json_str = 0
+            json_str_flag = False
             final_result = await run_python_code(gpt_ans["code"], gpt_ans["libraries"], folder=request_folder)
-            json_str = 1
+            json_str_flag = True
         except Exception as e:
-            print(f"Exception occurred: {e}")
-            count -= 1
+            print(f"Exception during retry execution: {e}")
+            count -= 1  # Retry
 
-        print(final_result)
-
+        print("Retry final_result:", final_result)
         count += 1
 
-    if final_result["code"] == 1:
-        final_result = final_result["output"]
-    else:
+    if final_result["code"] != 1:
+        # If failed after retries, try to read result.json from folder if exists
         result_path = os.path.join(request_folder, "result.json")
-        with open(result_path, "r") as f:
+        if os.path.exists(result_path):
+            with open(result_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return JSONResponse(content=data)
+        else:
+            return JSONResponse({"message": "Failed to generate valid result after retries."}, status_code=500)
+
+    # If success
+    result_path = os.path.join(request_folder, "result.json")
+    try:
+        with open(result_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return JSONResponse(content=data)
-
-    result_path = os.path.join(request_folder, "result.json")
-    with open(result_path, "r") as f:
-        try:
-            data = json.load(f)
-            return JSONResponse(content=data)
-        except Exception as e:
-            return JSONResponse({"message": f"Error occured while processing result.json: {e}"})
+    except Exception as e:
+        return JSONResponse({"message": f"Error occurred while processing result.json: {e}"}, status_code=500)
