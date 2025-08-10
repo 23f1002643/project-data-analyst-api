@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Read this file everything will happen on its own.
 
 `Note: try to use linux distro or install WSL(subsystem for linux) on windows for soomth running.`
@@ -63,3 +64,7 @@ eg:  https://dd0b98d2abc3.ngrok-free.app/api
 
 
 
+=======
+# project-data-analyst-api
+TDS Project 2
+>>>>>>> ec58eabb97f70edac301669c6006a879b9c22739
