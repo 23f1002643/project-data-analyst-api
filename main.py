@@ -51,10 +51,8 @@ async def analyze(request: Request):
 
     # Fallback: If no questions.txt, use the first uploaded file content as question_text
     if question_text is None and saved_files:
-        # Find the first uploaded file path
         first_file_path = next(iter(saved_files.values()))
-        # Read content of that file
-        async with aiofiles.open(first_file_path, "r", encoding="utf-8") as f:
+        async with aiofiles.open(first_file_path, "r") as f:
             question_text = await f.read()
 
     if question_text is None:
