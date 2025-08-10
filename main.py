@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import os
@@ -42,18 +42,17 @@ async def analyze(request: Request):
             saved_files[field_name] = file_path
 
             # If it's questions.txt, read its content
-            if field_name == "questions.txt":
-                async with aiofiles.open(file_path, "r") as f:
-                    question_text = await f.read()
+            if value.filename.lower() == "questions.txt":
+                contents = await value.read()
+                question_text = contents.decode("utf-8")
         else:
             saved_files[field_name] = value
 
     # Fallback: If no questions.txt, use the first file as question
     if question_text is None and saved_files:
-        first_file = next(iter(saved_files.values()))
-        async with aiofiles.open(first_file, "r") as f:
+        first_file_path = next(iter(saved_files.values()))
+        async with aiofiles.open(first_file_path, "r") as f:
             question_text = await f.read()
-
 
     # ✅ 4. Get code steps from LLM
     response = await parse_question_with_llm(
@@ -101,11 +100,10 @@ async def analyze(request: Request):
     try:
         final_result = await run_python_code(gpt_ans["code"], gpt_ans["libraries"], folder=request_folder)
     except Exception as e:
-        gpt_ans = await answer_with_data(response["questions"]+str("Please follow the json structure"), folder=request_folder)
+        gpt_ans = await answer_with_data(response["questions"] + str("Please follow the json structure"), folder=request_folder)
 
-        print("Trying after it caught under except block-wrong json format",gpt_ans)
+        print("Trying after it caught under except block-wrong json format", gpt_ans)
         final_result = await run_python_code(gpt_ans["code"], gpt_ans["libraries"], folder=request_folder)
-        
 
     count = 0
     json_str = 1
@@ -114,7 +112,7 @@ async def analyze(request: Request):
         new_question_text = str(response["questions"]) + "previous time this error occured" + str(final_result["output"])
         if json_str == 0:
             new_question_text += "follow the structure {'code': '', 'libraries': ''}"
-            
+
         gpt_ans = await answer_with_data(new_question_text, folder=request_folder)
 
         print(gpt_ans)
@@ -126,8 +124,6 @@ async def analyze(request: Request):
         except Exception as e:
             print(f"Exception occurred: {e}")
             count -= 1
-
-        
 
         print(final_result)
 
@@ -147,4 +143,4 @@ async def analyze(request: Request):
             data = json.load(f)
             return JSONResponse(content=data)
         except Exception as e:
-            return JSONResponse({"message": f"Error occured while processing reult.json: {e}"})
+            return JSONResponse({"message": f"Error occured while processing result.json: {e}"})
