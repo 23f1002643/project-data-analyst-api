@@ -50,9 +50,10 @@ async def analyze(request: Request):
 
     # Fallback: If no questions.txt, use the first file as question
     if question_text is None and saved_files:
-        first_file_path = next(iter(saved_files.values()))
-        async with aiofiles.open(first_file_path, "r") as f:
-            question_text = await f.read()
+        first_upload_file = next(iter(saved_files.values()))  # this is an UploadFile
+        content_bytes = await first_upload_file.read()  # read file content bytes asynchronously
+        question_text = content_bytes.decode('utf-8')  # decode bytes to string (assuming UTF-8)
+
 
     # ✅ 4. Get code steps from LLM
     response = await parse_question_with_llm(
